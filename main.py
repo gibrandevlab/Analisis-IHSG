@@ -326,6 +326,8 @@ if __name__ == "__main__":
     output_capture = StringCapture()
     with output_capture as out:
         try:
+            # Notify that bot is running
+            send_telegram_message("🤖 Bot Analysis Started...")
             run_analysis()
         except Exception as e:
             print(f"CRITICAL ERROR: {e}")
