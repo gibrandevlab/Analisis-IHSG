@@ -8,9 +8,14 @@ on:
     - cron: '30 2 * * *' # 09:30 AM WIB (09:30 WIB -> 02:30 UTC)
   workflow_dispatch: # Allows manual run
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   run-script:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
