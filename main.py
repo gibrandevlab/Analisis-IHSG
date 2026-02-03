@@ -1,248 +1,201 @@
 import os
+import logging
 import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import RobustScaler
 import matplotlib.pyplot as plt
 import io
 import matplotlib
+from datetime import datetime, timedelta
+import pytz
+from scipy import stats
 
-# Matplotlib Backend (Agar jalan di server tanpa monitor/GUI)
 matplotlib.use('Agg')
 
 # ==========================================
-# 1. CONFIGURATION
+# LOGGING SETUP (Institutional Standard)
 # ==========================================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+CORR_WINDOW = 60
+VOL_WINDOW = 20
+EWMA_LAMBDA = 0.94
+MIN_AVG_VOL = 1_000_000
+TSTAT_THRESHOLD = 1.5
 
 target_list = [
-    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK",
-    "MEDC.JK", "AKRA.JK", "PGAS.JK", "ADRO.JK", "PTBA.JK", "ITMG.JK",
-    "UNTR.JK", "ANTM.JK", "MDKA.JK", "BRMS.JK", "ICBP.JK", "UNVR.JK", "AMRT.JK"
+    "BBCA.JK","BBRI.JK","BMRI.JK","BBNI.JK","TLKM.JK","ASII.JK",
+    "MEDC.JK","AKRA.JK","PGAS.JK","ADRO.JK","PTBA.JK","ITMG.JK",
+    "UNTR.JK","ANTM.JK","MDKA.JK","BRMS.JK","ICBP.JK","UNVR.JK","AMRT.JK"
 ]
 
 macro_tickers = {
-    "^VIX": "VIX", "GC=F": "Gold", "CL=F": "Oil",
-    "YM=F": "DowFut", "IDR=X": "USDIDR", "JPY=X": "USDJPY"
+    "^VIX":"VIX","GC=F":"Gold","CL=F":"Oil",
+    "YM=F":"DowFut","IDR=X":"USDIDR","JPY=X":"USDJPY"
 }
 
-CORR_WINDOW = 60      
-VOL_WINDOW = 20       
-PENALTY_FACTOR = 0.5  
-
 # ==========================================
-# 2. TELEGRAM SENDER
+# TELEGRAM
 # ==========================================
 def send_telegram_photo(photo_buffer, caption):
-    if not TELEGRAM_TOKEN or "YOUR_BOT" in TELEGRAM_TOKEN:
-        print("⚠️ Token Telegram belum di-setting!")
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        logging.warning("Telegram not configured.")
         return
-
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     photo_buffer.seek(0)
-    
-    files = {'photo': ('report.jpg', photo_buffer, 'image/jpeg')}
-    data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': caption, 'parse_mode': 'HTML'}
-    
-    try:
-        response = requests.post(url, data=data, files=files, timeout=30)
-        response.raise_for_status()
-        print("✅ Telegram Photo sent successfully.")
-    except Exception as e:
-        print(f"❌ Failed to send Telegram: {e}")
+    requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'caption': caption, 'parse_mode': 'HTML'},
+                  files={'photo': ('report.jpg', photo_buffer, 'image/jpeg')})
 
 # ==========================================
-# 3. HELPER FUNCTIONS
+# UTIL FUNCTIONS
 # ==========================================
-def calculate_vol_z_score(series, window=20):
+def ewma_weights(n, lam=0.94):
+    w = np.array([(1-lam)*(lam**i) for i in range(n)][::-1])
+    return w / w.sum()
+
+def rolling_zscore(series, window):
     return (series - series.rolling(window).mean()) / series.rolling(window).std()
 
-def generate_hd_table_image(df, title_date):
-    """Fungsi menggambar tabel dengan border, header, dan styling profesional"""
-    
-    # Setup Figure (Tinggi dinamis berdasarkan jumlah baris)
-    fig_height = 2.5 + (len(df) * 0.45) 
-    fig, ax = plt.subplots(figsize=(12, fig_height))
-    
-    ax.axis('off')
-    ax.axis('tight')
-    
-    # Kolom header untuk tabel
-    col_labels = ["TICKER", "SIGNAL", "LAST PRICE", "CONFIDENCE", "VOL STATUS", "MACRO DRIVER"]
-    
-    display_data = []
-    for _, row in df.iterrows():
-        vol_stat = "LOW (!)" if row['vol_low'] else "NORMAL"
-        display_data.append([
-            row['ticker'],
-            row['signal_text'],
-            f"{row['price']:,.0f}",
-            f"{row['conf']:.1f}%",
-            vol_stat,
-            row['driver']
-        ])
+def get_market_context():
+    tz = pytz.timezone('Asia/Jakarta')
+    now = datetime.now(tz)
+    return now.strftime('%d %b %Y, %H:%M WIB')
 
-    # Mengaktifkan 'edges=closed' untuk menampilkan garis border di semua sel
-    table = ax.table(cellText=display_data, 
-                    colLabels=col_labels, 
-                    loc='center', 
-                    cellLoc='center', 
-                    edges='closed') 
-    
+# ==========================================
+# ROLLING REGRESSION (NO LEAKAGE)
+# ==========================================
+def rolling_factor_model(stock_ret, macro_ret):
+    df = pd.concat([stock_ret, macro_ret], axis=1).dropna()
+    if len(df) < CORR_WINDOW:
+        return None
+
+    window = df.iloc[-CORR_WINDOW:]
+    y = window.iloc[:, 0].values
+    X = window.iloc[:, 1:].values
+    X = np.column_stack([np.ones(len(X)), X])
+
+    w = ewma_weights(len(y), EWMA_LAMBDA)
+    W = np.diag(w)
+
+    beta = np.linalg.inv(X.T @ W @ X) @ (X.T @ W @ y)
+    residuals = y - X @ beta
+    sigma2 = (w * residuals**2).sum() / (len(y)-X.shape[1])
+    var_beta = sigma2 * np.linalg.inv(X.T @ W @ X)
+    tstats = beta / np.sqrt(np.diag(var_beta))
+
+    return beta[1:], tstats[1:], window.columns[1:]
+
+# ==========================================
+# TABLE IMAGE
+# ==========================================
+def generate_table(df, run_time):
+    fig_height = 3 + len(df)*0.45
+    fig, ax = plt.subplots(figsize=(12, fig_height))
+    ax.axis('off')
+    table = ax.table(cellText=df.values,
+                     colLabels=df.columns,
+                     loc='center',
+                     cellLoc='center',
+                     edges='closed')
     table.auto_set_font_size(False)
     table.set_fontsize(11)
-    table.scale(1.0, 2.0) # Mengatur kerenggangan baris (tinggi sel)
-    
-    # Styling setiap sel (Header & Body)
-    for (row, col), cell in table.get_celld().items():
-        cell.set_edgecolor('#bdc3c7') # Warna border abu-abu elegan
-        cell.set_linewidth(0.7)
-        
-        # Style Header
-        if row == 0:
-            cell.set_text_props(weight='bold', color='white')
-            cell.set_facecolor('#2c3e50') # Warna Biru Gelap
-        else:
-            # Zebra Striping (Warna selang-seling)
-            if row % 2 == 0:
-                cell.set_facecolor('#f8f9fa')
-            else:
-                cell.set_facecolor('white')
-            
-            # Logika pewarnaan teks berdasarkan isi data
-            signal_val = display_data[row-1][1]
-            vol_val = display_data[row-1][4]
-
-            # Warna Sinyal (Kolom 1)
-            if col == 1:
-                if "BUY" in signal_val or "UP" in signal_val:
-                    cell.set_text_props(color='#27ae60', weight='bold') # Hijau
-                elif "SELL" in signal_val or "DOWN" in signal_val:
-                    cell.set_text_props(color='#e74c3c', weight='bold') # Merah
-            
-            # Highlight Volume Low (Kolom 4)
-            if col == 4 and "LOW" in vol_val:
-                cell.set_text_props(color='#d35400', weight='bold') # Oranye
-
-    # Title & Metadata
-    plt.title(f"MARKET QUANT SIGNAL PRO\nQuantitative Macro & Volume Analysis", 
-              fontsize=18, weight='bold', pad=35, color='#2c3e50')
-    
-    plt.figtext(0.5, 0.90, f"Analysis Date: {title_date}", ha="center", fontsize=11, color='#7f8c8d')
-    
-    # Footer
-    plt.figtext(0.5, 0.04, "Engine: Robust Macro Model + Volume Penalty Factor | Data: Yahoo Finance", 
-                ha="center", fontsize=9, color='#95a5a6', style='italic')
-
-    # Save to Buffer dengan DPI tinggi agar tajam
+    table.scale(1, 2)
+    plt.title("INSTITUTIONAL MACRO FACTOR SIGNAL", fontsize=18, weight='bold')
+    plt.figtext(0.5, 0.04, f"Generated: {run_time}", ha="center", fontsize=10)
     buf = io.BytesIO()
-    plt.savefig(buf, format='jpg', bbox_inches='tight', dpi=200, facecolor='white')
+    plt.savefig(buf, format='jpg', bbox_inches='tight', dpi=200)
     plt.close(fig)
     return buf
 
 # ==========================================
-# 4. MAIN LOGIC
+# MAIN ANALYSIS ENGINE
 # ==========================================
 def run_analysis():
-    print("⏳ Processing market data...")
-    
-    all_tickers = list(macro_tickers.keys()) + target_list
-    try:
-        data_full = yf.download(all_tickers, period="2y", progress=False)
-        # Menangani MultiIndex dari yfinance
-        if isinstance(data_full.columns, pd.MultiIndex):
-            data_close = data_full.xs('Close', level=0, axis=1).ffill()
-            data_volume = data_full.xs('Volume', level=0, axis=1).ffill()
-        else:
-            data_close = data_full['Close'].ffill()
-            data_volume = data_full['Volume'].ffill()
-    except Exception as e:
-        print(f"❌ Error Download: {e}")
-        return
+    logging.info("Downloading market data...")
+    tickers = list(macro_tickers.keys()) + target_list
+    data = yf.download(tickers, period="2y", progress=False)
 
-    # Macro Processing
-    macro_returns = data_close[list(macro_tickers.keys())].pct_change().dropna()
-    scaler = RobustScaler()
-    macro_scaled = pd.DataFrame(scaler.fit_transform(macro_returns),
-                                index=macro_returns.index, columns=macro_returns.columns)
+    close = data['Close'].ffill()
+    volume = data['Volume'].ffill()
 
-    final_results = []
+    macro_ret = close[list(macro_tickers.keys())].pct_change()
+    results = []
 
     for stock in target_list:
         try:
-            stock_price = data_close[stock].dropna()
-            stock_vol = data_volume[stock].dropna()
-            stock_ret = stock_price.pct_change()
-            
-            df_ind = pd.concat([macro_scaled, stock_ret.shift(-1)], axis=1).dropna()
-            if len(df_ind) < CORR_WINDOW: continue
-            
-            # Correlation Analysis
-            stock_corr = df_ind.iloc[-CORR_WINDOW:].corr()[stock].drop(stock)
-            signals = macro_scaled.iloc[-1] * stock_corr
-            raw_score = signals.sum()
-            
-            abs_sum = signals.abs().sum()
-            agreement = (abs(raw_score) / abs_sum) if abs_sum != 0 else 0
-            
-            # Volume Penalty Logic
-            vol_z = calculate_vol_z_score(stock_vol, VOL_WINDOW).iloc[-1]
-            final_score = raw_score
-            has_penalty = False
-            
-            if raw_score > 0.1 and vol_z < 0:
-                final_score *= PENALTY_FACTOR
-                has_penalty = True
+            price = close[stock]
+            vol = volume[stock]
+            if vol.rolling(20).mean().iloc[-1] < MIN_AVG_VOL:
+                continue
 
-            # Signal Determination
-            signal_text = "WAIT"
-            if final_score > 0.35 and agreement > 0.6: signal_text = "BUY 🚀"
-            elif final_score > 0.1: signal_text = "UP 📈"
-            elif final_score < -0.35 and agreement > 0.6: signal_text = "SELL 🔻"
-            elif final_score < -0.1: signal_text = "DOWN 📉"
+            stock_ret = price.pct_change()
 
-            confidence = (stock_corr.abs().max() * 100) * (PENALTY_FACTOR if has_penalty else 1.0)
-            driver = macro_tickers.get(stock_corr.abs().idxmax(), "N/A")
+            model = rolling_factor_model(stock_ret, macro_ret)
+            if model is None:
+                continue
 
-            final_results.append({
-                "ticker": stock.replace(".JK", ""),
-                "signal_text": signal_text,
-                "price": stock_price.iloc[-1],
-                "conf": confidence,
-                "score": final_score,
-                "vol_low": vol_z < 0,
-                "driver": driver
-            })
-        except: continue
+            betas, tstats, drivers = model
 
-    if not final_results:
-        print("⚠️ No results generated.")
+            # Only keep significant factors
+            sig_mask = np.abs(tstats) > TSTAT_THRESHOLD
+            if not sig_mask.any():
+                continue
+
+            latest_macro = macro_ret.iloc[-1]
+            score = np.sum(betas[sig_mask] * latest_macro[sig_mask])
+
+            vol_z = rolling_zscore(vol, VOL_WINDOW).iloc[-1]
+            if vol_z < 0:
+                score *= 0.7
+
+            signal = "WAIT"
+            if score > 0.01: signal = "BUY"
+            if score < -0.01: signal = "SELL"
+
+            confidence = min(95, np.mean(np.abs(tstats[sig_mask]))*20)
+
+            main_driver = macro_tickers[drivers[np.argmax(np.abs(betas))]]
+
+            results.append([stock.replace(".JK",""), signal,
+                            f"{price.iloc[-1]:,.0f}",
+                            f"{confidence:.1f}%",
+                            "LOW" if vol_z < 0 else "NORMAL",
+                            main_driver])
+        except Exception as e:
+            logging.warning(f"Skip {stock}: {e}")
+
+    if not results:
+        logging.warning("No signals generated.")
         return
 
-    # Sort results by score (Bullish to Bearish)
-    sorted_results = sorted(final_results, key=lambda x: x['score'], reverse=True)
-    df_results = pd.DataFrame(sorted_results)
-    
-    # Generate Timestamp
-    now_str = pd.Timestamp.now().strftime('%d %b %Y, %H:%M WIB')
-    
-    print("🎨 Generating HD Table Image...")
-    image_buffer = generate_hd_table_image(df_results, now_str)
-    
-    # Caption Telegram
-    caption_text = (
-        f"<b>📊 MARKET SIGNAL REPORT</b>\n"
-        f"📅 <i>{now_str}</i>\n\n"
-        f"💡 <b>Keterangan Kolom:</b>\n"
-        f"• <b>CONF:</b> Keyakinan sinyal (makro korelasi).\n"
-        f"• <b>VOL STATUS:</b> Jika LOW (!), sinyal lemah karena volume sepi.\n"
-        f"• <b>DRIVER:</b> Aset luar yang paling memengaruhi ticker ini."
-    )
-    
-    print("🚀 Sending to Telegram...")
-    send_telegram_photo(image_buffer, caption_text)
+    df = pd.DataFrame(results,
+        columns=["TICKER","SIGNAL","PRICE","CONFIDENCE","VOLUME","MACRO DRIVER"]
+    ).sort_values("CONFIDENCE", ascending=False)
 
+    run_time = get_market_context()
+    img = generate_table(df, run_time)
+
+    caption = (
+        "<b>Institutional Factor Model Signal</b>\n"
+        "Method: Rolling EWMA Regression\n"
+        "Risk Controls: Liquidity + Volatility Filter\n"
+        f"Time: {run_time}"
+    )
+
+    send_telegram_photo(img, caption)
+    logging.info("Signal report sent.")
+
+# ==========================================
 if __name__ == "__main__":
     run_analysis()
