@@ -2,13 +2,7 @@ name: Daily Python Script
 
 on:
   schedule:
-    # Times are in UTC
-    # 05:30 WIB = 22:30 UTC
-    - cron: '30 22 * * *'
-    # 09:45 WIB = 02:45 UTC
-    - cron: '45 2 * * *'
-    # 22:00 WIB = 15:00 UTC
-    - cron: '0 15 * * *'
+    - cron: '* * * * *'
   workflow_dispatch: # Allows manual run
 
 jobs:
@@ -32,4 +26,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py
+        run: |
+          python main.py
+          sleep 30
+          python main.py
