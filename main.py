@@ -84,12 +84,12 @@ def generate_hd_table_image(df, title_date):
             row['driver']
         ])
 
-    # Mengaktifkan 'edges=all' untuk menampilkan garis border di semua sel
+    # Mengaktifkan 'edges=closed' untuk menampilkan garis border di semua sel
     table = ax.table(cellText=display_data, 
                     colLabels=col_labels, 
                     loc='center', 
                     cellLoc='center', 
-                    edges='all') 
+                    edges='closed') 
     
     table.auto_set_font_size(False)
     table.set_fontsize(11)
