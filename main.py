@@ -6,16 +6,16 @@ import numpy as np
 from sklearn.preprocessing import RobustScaler
 import matplotlib.pyplot as plt
 import io
+import matplotlib
+
+# Matplotlib Backend (Agar jalan di server tanpa monitor/GUI)
+matplotlib.use('Agg')
 
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "GANTI_TOKEN_DISINI")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "GANTI_CHAT_ID_DISINI")
-
-# Matplotlib Backend (Agar jalan di server tanpa monitor)
-import matplotlib
-matplotlib.use('Agg')
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
 
 target_list = [
     "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "TLKM.JK", "ASII.JK",
@@ -33,16 +33,14 @@ VOL_WINDOW = 20
 PENALTY_FACTOR = 0.5  
 
 # ==========================================
-# 2. TELEGRAM SENDER (IMAGE SUPPORT)
+# 2. TELEGRAM SENDER
 # ==========================================
 def send_telegram_photo(photo_buffer, caption):
-    if not TELEGRAM_TOKEN or "GANTI" in TELEGRAM_TOKEN:
+    if not TELEGRAM_TOKEN or "YOUR_BOT" in TELEGRAM_TOKEN:
         print("⚠️ Token Telegram belum di-setting!")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    
-    # Reset pointer buffer ke awal file
     photo_buffer.seek(0)
     
     files = {'photo': ('report.jpg', photo_buffer, 'image/jpeg')}
@@ -58,106 +56,88 @@ def send_telegram_photo(photo_buffer, caption):
 # ==========================================
 # 3. HELPER FUNCTIONS
 # ==========================================
-def get_wilders_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
 def calculate_vol_z_score(series, window=20):
     return (series - series.rolling(window).mean()) / series.rolling(window).std()
 
 def generate_hd_table_image(df, title_date):
-    """Fungsi untuk menggambar tabel HD menggunakan Matplotlib"""
+    """Fungsi menggambar tabel dengan border, header, dan styling profesional"""
     
-    # 1. Setup Figure & Colors
-    # Tinggi gambar dinamis sesuai jumlah baris
-    fig_height = 2 + (len(df) * 0.5) 
-    fig, ax = plt.subplots(figsize=(10, fig_height)) # Lebar 10 inch
+    # Setup Figure (Tinggi dinamis berdasarkan jumlah baris)
+    fig_height = 2.5 + (len(df) * 0.45) 
+    fig, ax = plt.subplots(figsize=(12, fig_height))
     
-    # Hapus Axis (Garis grafik)
     ax.axis('off')
     ax.axis('tight')
     
-    # 2. Prepare Data for Table
-    # Kita buat kolom baru untuk display agar rapi
+    # Kolom header untuk tabel
+    col_labels = ["TICKER", "SIGNAL", "LAST PRICE", "CONFIDENCE", "VOL STATUS", "MACRO DRIVER"]
+    
     display_data = []
-    
-    # Header Columns
-    col_labels = ["TICKER", "SIGNAL", "PRICE", "CONF", "VOL STAT", "DRIVER"]
-    
     for _, row in df.iterrows():
-        # Tambahkan tanda seru visual di kolom Vol Stat
         vol_stat = "LOW (!)" if row['vol_low'] else "NORMAL"
-        
         display_data.append([
             row['ticker'],
-            row['signal_text'], # e.g. BUY 🚀
+            row['signal_text'],
             f"{row['price']:,.0f}",
-            f"{row['conf']:.0f}%",
+            f"{row['conf']:.1f}%",
             vol_stat,
             row['driver']
         ])
 
-    # 3. Draw Table
-    # cellLoc='center' agar teks di tengah
-    table = ax.table(cellText=display_data, colLabels=col_labels, 
-                     loc='center', cellLoc='center', edges='open')
+    # Mengaktifkan 'edges=all' untuk menampilkan garis border di semua sel
+    table = ax.table(cellText=display_data, 
+                    colLabels=col_labels, 
+                    loc='center', 
+                    cellLoc='center', 
+                    edges='all') 
     
-    # 4. Styling (The "HD" Part)
     table.auto_set_font_size(False)
-    table.set_fontsize(12)
-    table.scale(1.2, 2.0) # Scaling lebar dan tinggi sel
+    table.set_fontsize(11)
+    table.scale(1.0, 2.0) # Mengatur kerenggangan baris (tinggi sel)
     
-    # Header Style
+    # Styling setiap sel (Header & Body)
     for (row, col), cell in table.get_celld().items():
-        cell.set_edgecolor('white') # Hapus garis border default hitam
-        cell.set_linewidth(0.5)
+        cell.set_edgecolor('#bdc3c7') # Warna border abu-abu elegan
+        cell.set_linewidth(0.7)
         
-        # Header Row
+        # Style Header
         if row == 0:
             cell.set_text_props(weight='bold', color='white')
-            cell.set_facecolor('#2c3e50') # Dark Blue Header
-            cell.set_height(0.1)
+            cell.set_facecolor('#2c3e50') # Warna Biru Gelap
         else:
-            # Alternating Row Colors (Zebra Striping)
+            # Zebra Striping (Warna selang-seling)
             if row % 2 == 0:
-                cell.set_facecolor('#f2f2f2') # Light Grey
+                cell.set_facecolor('#f8f9fa')
             else:
                 cell.set_facecolor('white')
             
-            # Text Coloring Logic based on Signal
-            signal_val = display_data[row-1][1] # Ambil text signal
-            
-            # Warnai teks kolom SIGNAL & CONF
-            if col in [1, 3]: 
+            # Logika pewarnaan teks berdasarkan isi data
+            signal_val = display_data[row-1][1]
+            vol_val = display_data[row-1][4]
+
+            # Warna Sinyal (Kolom 1)
+            if col == 1:
                 if "BUY" in signal_val or "UP" in signal_val:
-                    cell.set_text_props(color='#27ae60', weight='bold') # Green
+                    cell.set_text_props(color='#27ae60', weight='bold') # Hijau
                 elif "SELL" in signal_val or "DOWN" in signal_val:
-                    cell.set_text_props(color='#c0392b', weight='bold') # Red
+                    cell.set_text_props(color='#e74c3c', weight='bold') # Merah
             
-            # Warnai kolom VOL jika Low
-            if col == 4 and "LOW" in display_data[row-1][4]:
-                cell.set_text_props(color='#e67e22', weight='bold') # Orange
+            # Highlight Volume Low (Kolom 4)
+            if col == 4 and "LOW" in vol_val:
+                cell.set_text_props(color='#d35400', weight='bold') # Oranye
 
-            # Padding kiri untuk Ticker
-            if col == 0:
-                cell.set_text_props(ha='left')
-                
-    # 5. Title
-    plt.title(f"MARKET QUANT SIGNAL PRO\nDate: {title_date}", 
-              fontsize=16, weight='bold', pad=20, color='#34495e')
+    # Title & Metadata
+    plt.title(f"MARKET QUANT SIGNAL PRO\nQuantitative Macro & Volume Analysis", 
+              fontsize=18, weight='bold', pad=35, color='#2c3e50')
     
-    # 6. Footer/Watermark
-    plt.figtext(0.5, 0.02, "Engine: Robust Macro + Volume Penalty Model", 
-                ha="center", fontsize=8, color='gray')
+    plt.figtext(0.5, 0.90, f"Analysis Date: {title_date}", ha="center", fontsize=11, color='#7f8c8d')
+    
+    # Footer
+    plt.figtext(0.5, 0.04, "Engine: Robust Macro Model + Volume Penalty Factor | Data: Yahoo Finance", 
+                ha="center", fontsize=9, color='#95a5a6', style='italic')
 
-    # 7. Save to Buffer
+    # Save to Buffer dengan DPI tinggi agar tajam
     buf = io.BytesIO()
-    # DPI 200 agar HD (High Definition) dan tajam
     plt.savefig(buf, format='jpg', bbox_inches='tight', dpi=200, facecolor='white')
     plt.close(fig)
     return buf
@@ -166,11 +146,12 @@ def generate_hd_table_image(df, title_date):
 # 4. MAIN LOGIC
 # ==========================================
 def run_analysis():
-    print("⏳ Downloading data & crunching numbers...")
+    print("⏳ Processing market data...")
     
     all_tickers = list(macro_tickers.keys()) + target_list
     try:
         data_full = yf.download(all_tickers, period="2y", progress=False)
+        # Menangani MultiIndex dari yfinance
         if isinstance(data_full.columns, pd.MultiIndex):
             data_close = data_full.xs('Close', level=0, axis=1).ffill()
             data_volume = data_full.xs('Volume', level=0, axis=1).ffill()
@@ -181,7 +162,7 @@ def run_analysis():
         print(f"❌ Error Download: {e}")
         return
 
-    # --- MACRO PROCESSING ---
+    # Macro Processing
     macro_returns = data_close[list(macro_tickers.keys())].pct_change().dropna()
     scaler = RobustScaler()
     macro_scaled = pd.DataFrame(scaler.fit_transform(macro_returns),
@@ -198,6 +179,7 @@ def run_analysis():
             df_ind = pd.concat([macro_scaled, stock_ret.shift(-1)], axis=1).dropna()
             if len(df_ind) < CORR_WINDOW: continue
             
+            # Correlation Analysis
             stock_corr = df_ind.iloc[-CORR_WINDOW:].corr()[stock].drop(stock)
             signals = macro_scaled.iloc[-1] * stock_corr
             raw_score = signals.sum()
@@ -205,14 +187,16 @@ def run_analysis():
             abs_sum = signals.abs().sum()
             agreement = (abs(raw_score) / abs_sum) if abs_sum != 0 else 0
             
+            # Volume Penalty Logic
             vol_z = calculate_vol_z_score(stock_vol, VOL_WINDOW).iloc[-1]
-            
             final_score = raw_score
             has_penalty = False
+            
             if raw_score > 0.1 and vol_z < 0:
                 final_score *= PENALTY_FACTOR
                 has_penalty = True
 
+            # Signal Determination
             signal_text = "WAIT"
             if final_score > 0.35 and agreement > 0.6: signal_text = "BUY 🚀"
             elif final_score > 0.1: signal_text = "UP 📈"
@@ -233,35 +217,32 @@ def run_analysis():
             })
         except: continue
 
-    # ==========================================
-    # 5. GENERATE IMAGE & SEND
-    # ==========================================
     if not final_results:
         print("⚠️ No results generated.")
         return
 
-    # Sort
+    # Sort results by score (Bullish to Bearish)
     sorted_results = sorted(final_results, key=lambda x: x['score'], reverse=True)
     df_results = pd.DataFrame(sorted_results)
     
     # Generate Timestamp
     now_str = pd.Timestamp.now().strftime('%d %b %Y, %H:%M WIB')
     
-    print("🎨 Generating HD Image...")
-    # Create Image Buffer
+    print("🎨 Generating HD Table Image...")
     image_buffer = generate_hd_table_image(df_results, now_str)
     
-    # Caption Text for Telegram
+    # Caption Telegram
     caption_text = (
         f"<b>📊 MARKET SIGNAL REPORT</b>\n"
         f"📅 <i>{now_str}</i>\n\n"
-        f"💡 <b>Legend:</b>\n"
-        f"• <b>CONF:</b> Tingkat keyakinan berdasarkan korelasi makro.\n"
-        f"• <b>LOW (!):</b> Volume sedang sepi, sinyal mungkin false alarm (Penalty applied)."
+        f"💡 <b>Keterangan Kolom:</b>\n"
+        f"• <b>CONF:</b> Keyakinan sinyal (makro korelasi).\n"
+        f"• <b>VOL STATUS:</b> Jika LOW (!), sinyal lemah karena volume sepi.\n"
+        f"• <b>DRIVER:</b> Aset luar yang paling memengaruhi ticker ini."
     )
     
     print("🚀 Sending to Telegram...")
     send_telegram_photo(image_buffer, caption_text)
 
 if __name__ == "__main__":
-    run_analysis() 
+    run_analysis()
