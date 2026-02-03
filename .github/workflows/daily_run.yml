@@ -32,6 +32,7 @@ jobs:
 
       - name: Run script
         env:
+          TZ: 'Asia/Jakarta'
           TELEGRAM_TOKEN: '7827421978:AAE4NC3_ivtpqBqtJf_W2BTgSLtx_QDk5Y8'
           TELEGRAM_CHAT_ID: '5840594566'
         run: |
