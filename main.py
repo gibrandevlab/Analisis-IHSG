@@ -21,6 +21,47 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+# ======================
+# IDX TRADING HOURS
+# ======================
+def is_trading_hours():
+    """Check if current time is within IDX trading hours"""
+    tz = pytz.timezone('Asia/Jakarta')
+    now = datetime.now(tz)
+    
+    # Skip weekends
+    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+        logging.info(f"Skipping: Weekend (day {now.weekday()})")
+        return False
+    
+    current_time = now.time()
+    is_friday = now.weekday() == 4
+    
+    # Define trading sessions
+    if is_friday:
+        # Friday: Session 1 (09:00-11:30), Session 2 (14:00-15:49)
+        session1_start = datetime.strptime("09:00", "%H:%M").time()
+        session1_end = datetime.strptime("11:30", "%H:%M").time()
+        session2_start = datetime.strptime("14:00", "%H:%M").time()
+        session2_end = datetime.strptime("15:49", "%H:%M").time()
+    else:
+        # Mon-Thu: Session 1 (09:00-12:00), Session 2 (13:30-15:49)
+        session1_start = datetime.strptime("09:00", "%H:%M").time()
+        session1_end = datetime.strptime("12:00", "%H:%M").time()
+        session2_start = datetime.strptime("13:30", "%H:%M").time()
+        session2_end = datetime.strptime("15:49", "%H:%M").time()
+    
+    in_session1 = session1_start <= current_time <= session1_end
+    in_session2 = session2_start <= current_time <= session2_end
+    
+    if not (in_session1 or in_session2):
+        day_name = "Friday" if is_friday else "Mon-Thu"
+        logging.info(f"Skipping: Outside trading hours ({day_name}, current: {current_time})")
+        return False
+    
+    return True
+
+
 TARGET_LIST = [
     "BBCA.JK","BBRI.JK","BMRI.JK","BBNI.JK","TLKM.JK","ASII.JK",
     "MEDC.JK","AKRA.JK","PGAS.JK","ADRO.JK","PTBA.JK","ITMG.JK",
@@ -169,4 +210,8 @@ def run_combined_analysis():
         send_telegram_message(f"🏦 <b>INSTITUTIONAL</b>: No clear signals detected at {run_time}")
 
 if __name__ == "__main__":
+    if not is_trading_hours():
+        logging.info("Script terminated: Not in trading hours")
+        exit(0)
+    
     run_combined_analysis()
