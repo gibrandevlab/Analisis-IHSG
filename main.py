@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import RobustScaler
 
+import html
+
 # ==========================================
 # TELEGRAM NOTIFICATION SETUP
 # ==========================================
@@ -24,9 +26,12 @@ def send_telegram_message(message):
     # If the message is potentially long, we might need to split it, 
     # but for this summary tablest it should be fine.
     # We wrap in <pre> tag for monospaced font preservation.
+    # IMPORTANT: Escape HTML characters to avoid 'Bad Request: can't parse entities'
+    safe_message = html.escape(message)
+    
     payload = {
         'chat_id': chat_id,
-        'text': f"<pre>{message}</pre>",
+        'text': f"<pre>{safe_message}</pre>",
         'parse_mode': 'HTML'
     }
     
@@ -36,6 +41,10 @@ def send_telegram_message(message):
         print("✅ Telegram message sent successfully.")
     except Exception as e:
         print(f"❌ Failed to send Telegram message: {e}")
+        try:
+            print(f"Server response: {response.text}")
+        except:
+            pass
 
 # Capture stdout to send as message later
 class StringCapture:
