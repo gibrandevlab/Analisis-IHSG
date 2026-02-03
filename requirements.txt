@@ -1,0 +1,6 @@
+requests
+python-telegram-bot
+yfinance
+pandas
+numpy
+scikit-learn
