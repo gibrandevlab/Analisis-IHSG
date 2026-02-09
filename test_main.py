@@ -18,8 +18,8 @@ matplotlib.use('Agg')
 # ======================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = '7827421978:AAE4NC3_ivtpqBqtJf_W2BTgSLtx_QDk5Y8'
+TELEGRAM_CHAT_ID = '5840594566'
 
 TARGET_LIST = [
     "BBCA.JK","BBRI.JK","BMRI.JK","BBNI.JK","TLKM.JK","ASII.JK",

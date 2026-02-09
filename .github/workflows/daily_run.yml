@@ -2,12 +2,11 @@ name: Daily Python Script
 
 on:
   schedule:
-    - cron: '0 2 * * 1-5'   # 09:00 WIB - Market opens (all days)
-    - cron: '30 2 * * 1-5'  # 09:30 WIB - Early trading (all days)
-    - cron: '0 3 * * 1-5'   # 10:00 WIB - Mid Session 1 (all days)
-    - cron: '45 6 * * 1-5'  # 13:45 WIB - 15min after Session 2 (Mon-Thu: 13:30)
-    - cron: '15 7 * * 5'    # 14:15 WIB - 15min after Session 2 (Fri: 14:00)
-    - cron: '49 8 * * 1-5'  # 15:49 WIB - Market close (all days)
+    - cron: '0 2 * * 1-5'   # 09:00 WIB (09:00 WIB -> 02:00 UTC) - Pre-market
+    - cron: '30 2 * * 1-5'  # 09:30 WIB (09:30 WIB -> 02:30 UTC) - Session 1 opens
+    - cron: '0 3 * * 1-5'   # 10:00 WIB (10:00 WIB -> 03:00 UTC) - During Session 1
+    - cron: '45 6 * * 1-5'  # 13:45 WIB (13:45 WIB -> 06:45 UTC) - 15 min after Session 2 opens
+    - cron: '50 8 * * 1-5'  # 15:50 WIB (15:50 WIB -> 08:50 UTC) - Market close
   workflow_dispatch: # Allows manual run
 
 concurrency:
